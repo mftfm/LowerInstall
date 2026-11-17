@@ -1,52 +1,44 @@
 /*
- * LowerInstall — install apps that require a newer iOS version.
+ * LowerInstall 1.4.1 — rootless compatibility fork.
  *
- * Two subsystems injected into launchd-managed daemons:
+ * Installer hook: narrowly bypasses MIBundle's minimum-OS validation.
+ * Store hook: optionally rewrites the iOS/device tokens in App Store
+ * User-Agent headers. These are independently controlled in Settings.
  *
- *   A. installd hooks (MIBundle / MIInstallableBundle / MIExecutableBundle /
- *      MIPluginKitPluginBundle / MIDaemonConfiguration) force device-family,
- *      thinning, and metadata validation to report success, letting IPAs
- *      whose Info.plist would otherwise reject this device/iOS install.
- *
- *   B. Store hooks (NSMutableURLRequest -setValue:forHTTPHeaderField:)
- *      rewrite outgoing User-Agent so Apple's metadata servers return IPAs
- *      for a spoofed iOS / device pair.  Runs in itunesstored (iOS 9) and
- *      appstored (iOS 10+).
- *
- * Preferences plist:
- *   /var/mobile/Library/Preferences/dev.playday3008.lowerinstall.plist
- *
- * Darwin reload notification:
- *   dev.playday3008.lowerinstall/SettingsChanged
+ * This deliberately does not bypass signing, bundle metadata, entitlement,
+ * device-family, or unrelated installer validation.
  */
 
 #import <Foundation/Foundation.h>
+#import <objc/runtime.h>
 #import <substrate.h>
 #import <notify.h>
 #import <sys/utsname.h>
 #import <syslog.h>
+#import <string.h>
+#import <stdint.h>
 
 extern const char *__progname;
 
-#define LILog(lvl, fmt, ...) syslog((lvl), "[LowerInstall:%s] " fmt, __progname, ##__VA_ARGS__)
+#define LILog(lvl, fmt, ...) syslog((lvl), "[LowerInstall:%s] " fmt, (__progname ? __progname : "unknown"), ##__VA_ARGS__)
 #define LINotice(fmt, ...)   LILog(LOG_NOTICE, fmt, ##__VA_ARGS__)
-#define LIInfo(fmt, ...)     LILog(LOG_INFO,   fmt, ##__VA_ARGS__)
-#define LIDebug(fmt, ...)    LILog(LOG_DEBUG,  fmt, ##__VA_ARGS__)
+#define LIInfo(fmt, ...)     LILog(LOG_INFO, fmt, ##__VA_ARGS__)
+#define LIDebug(fmt, ...)    LILog(LOG_DEBUG, fmt, ##__VA_ARGS__)
 
 #define PLIST_PATH "/var/mobile/Library/Preferences/dev.playday3008.lowerinstall.plist"
+#define SETTINGS_CHANGED "dev.playday3008.lowerinstall/SettingsChanged"
 
 static struct {
-    NSString *currentDevice;   // uname().machine, cached at %ctor
-    NSString *currentVersion;  // ProductVersion from SystemVersion.plist, cached at %ctor
-    NSString *spoofDevice;     // loaded from prefs; defaults to currentDevice
-    NSString *spoofVersion;    // loaded from prefs; defaults to currentVersion
+    NSString *currentDevice;
+    NSString *currentVersion;
+    NSString *spoofDevice;
+    NSString *spoofVersion;
 } g_state;
 
-static BOOL g_enabled       = YES;
+static BOOL g_enabled = YES;
 static BOOL g_hooksInstalld = YES;
-static BOOL g_hooksStore    = YES;
-
-static NSObject *g_lock;
+static BOOL g_hooksStore = YES;
+static NSObject *g_lock = nil;
 
 static void settingsChanged(CFNotificationCenterRef center,
                             void *observer,
@@ -54,252 +46,148 @@ static void settingsChanged(CFNotificationCenterRef center,
                             const void *object,
                             CFDictionaryRef userInfo) {
     (void)center; (void)observer; (void)name; (void)object; (void)userInfo;
+
     @autoreleasepool {
-        NSDictionary *p = [NSDictionary dictionaryWithContentsOfFile:@PLIST_PATH] ?: @{};
+        NSDictionary *prefs = [NSDictionary dictionaryWithContentsOfFile:@PLIST_PATH] ?: @{};
 
-        g_enabled       = [(p[@"Enabled"]       ?: @YES) boolValue];
-        g_hooksInstalld = [(p[@"HooksInstalld"] ?: @YES) boolValue];
-        g_hooksStore    = [(p[@"HooksStore"]    ?: @YES) boolValue];
+        g_enabled = [(prefs[@"Enabled"] ?: @YES) boolValue];
+        g_hooksInstalld = [(prefs[@"HooksInstalld"] ?: @YES) boolValue];
+        g_hooksStore = [(prefs[@"HooksStore"] ?: @YES) boolValue];
 
-        NSString *sd = p[@"SpoofDevice"]  ?: g_state.currentDevice;
-        NSString *sv = p[@"SpoofVersion"] ?: g_state.currentVersion;
+        NSString *device = prefs[@"SpoofDevice"] ?: g_state.currentDevice ?: @"";
+        NSString *version = prefs[@"SpoofVersion"] ?: g_state.currentVersion ?: @"";
+
         @synchronized(g_lock) {
-            [g_state.spoofDevice  release]; g_state.spoofDevice  = [sd copy];
-            [g_state.spoofVersion release]; g_state.spoofVersion = [sv copy];
+            [g_state.spoofDevice release];
+            g_state.spoofDevice = [device copy];
+            [g_state.spoofVersion release];
+            g_state.spoofVersion = [version copy];
         }
 
-        LINotice("reload: enabled=%d installd=%d store=%d spoof='%s'/'%s'",
-                 g_enabled, g_hooksInstalld, g_hooksStore,
-                 g_state.spoofDevice.UTF8String,
-                 g_state.spoofVersion.UTF8String);
+        LINotice("settings reloaded: enabled=%d installer=%d store=%d",
+                 g_enabled, g_hooksInstalld, g_hooksStore);
     }
 }
 
 %group InstalldHooks
 
-%hook MIDaemonConfiguration
-- (BOOL)skipDeviceFamilyCheck {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIDaemonConfiguration: bypass skipDeviceFamilyCheck");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)skipThinningCheck {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIDaemonConfiguration: bypass skipThinningCheck");
-        return YES;
-    }
-    return %orig;
-}
-%end
-
 %hook MIBundle
-- (NSString *)minimumOSVersion {
-    NSString *ret = %orig;
-    if (g_enabled && g_hooksInstalld) {
-        LIInfo("MIBundle: override minimumOSVersion '%s' -> '2.0'", ret.UTF8String);
-        ret = @"2.0";
-    }
-    return ret;
-}
-- (NSArray *)supportedDevices {
-    NSArray *ret = %orig ?: @[];
-    if (g_enabled && g_hooksInstalld && ![ret containsObject:g_state.currentDevice]) {
-        LIInfo("MIBundle: inject device '%s' into supportedDevices (had: %s)",
-               g_state.currentDevice.UTF8String, ret.description.UTF8String);
-        NSMutableArray *m = [ret mutableCopy];
-        [m addObject:g_state.currentDevice];
-        ret = [[m copy] autorelease];
-        [m release];
-    }
-    return ret;
-}
-- (BOOL)isCompatibleWithDeviceFamily:(int)device {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass isCompatibleWithDeviceFamily:%d", device);
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)isApplicableToCurrentDeviceFamilyWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass isApplicableToCurrentDeviceFamilyWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)isApplicableToCurrentOSVersionWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass isApplicableToCurrentOSVersionWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)isApplicableToOSVersion:(id)arg1 error:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass isApplicableToOSVersion:%s", [arg1 description].UTF8String);
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)isApplicableToCurrentDeviceCapabilitiesWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass isApplicableToCurrentDeviceCapabilitiesWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)thinningMatchesCurrentDeviceWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass thinningMatchesCurrentDeviceWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)validateAppMetadataWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass validateAppMetadataWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)validatePluginMetadataWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIBundle: bypass validatePluginMetadataWithError");
-        return YES;
-    }
-    return %orig;
-}
-%end
 
-%hook MIInstallableBundle
-- (BOOL)_validateApplicationIdentifierForNewBundleSigningInfo:(id)arg1 error:(id *)arg2 {
+- (BOOL)_isMinimumOSVersion:(id)minimumOSVersion
+       applicableToOSVersion:(id)applicableOSVersion
+                   requiredOS:(unsigned long long)requiredOS
+                        error:(NSError **)error {
     if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIInstallableBundle: bypass _validateApplicationIdentifierForNewBundleSigningInfo");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)_verifyBundleMetadataWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIInstallableBundle: bypass _verifyBundleMetadataWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)_verifySubBundleMetadataWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIInstallableBundle: bypass _verifySubBundleMetadataWithError");
-        return YES;
-    }
-    return %orig;
-}
-- (BOOL)_isValidWatchKitApp:(id)arg1 withVersion:(id)arg2 installableSigningInfo:(id)arg3 error:(id *)arg4 {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIInstallableBundle: bypass _isValidWatchKitApp");
-        return YES;
-    }
-    return %orig;
-}
-%end
+        if (error != NULL) {
+            *error = nil;
+        }
 
-%hook MIExecutableBundle
-- (BOOL)hasOnlyAllowedWatchKitAppInfoPlistKeysForWatchKitVersion:(id)arg1 error:(id *)arg2 {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIExecutableBundle: bypass hasOnlyAllowedWatchKitAppInfoPlistKeysForWatchKitVersion");
+        LIInfo("bypassing minimum-OS validation: minimum=%s applicable=%s requiredOS=%llu",
+               [[minimumOSVersion description] UTF8String] ?: "(null)",
+               [[applicableOSVersion description] UTF8String] ?: "(null)",
+               requiredOS);
         return YES;
     }
+
     return %orig;
 }
-%end
 
-%hook MIPluginKitPluginBundle
-- (BOOL)validateBundleMetadataWithError:(id *)error {
-    if (g_enabled && g_hooksInstalld) {
-        LIDebug("MIPluginKitPluginBundle: bypass validateBundleMetadataWithError");
-        return YES;
-    }
-    return %orig;
-}
 %end
-
-%end   // group InstalldHooks
+%end
 
 %group StoreHooks
 
 %hook NSMutableURLRequest
+
 - (void)setValue:(NSString *)value forHTTPHeaderField:(NSString *)field {
-    if (!g_enabled || !g_hooksStore || !field || !value ||
-        ![field isEqualToString:@"User-Agent"] ||
+    if (!g_enabled || !g_hooksStore || value == nil || field == nil ||
+        [field caseInsensitiveCompare:@"User-Agent"] != NSOrderedSame ||
+        g_state.currentVersion.length == 0 ||
         [value rangeOfString:g_state.currentVersion].location == NSNotFound) {
         %orig(value, field);
         return;
     }
 
-    NSString *spoofVersion, *spoofDevice;
-    @synchronized(g_lock) {
-        spoofVersion = [g_state.spoofVersion retain];
-        spoofDevice  = [g_state.spoofDevice retain];
-    }
+    NSString *spoofVersion = nil;
+    NSString *spoofDevice = nil;
 
-    NSString *curVer = g_state.currentVersion;
-    NSString *curDev = g_state.currentDevice;
+    @synchronized(g_lock) {
+        spoofVersion = [g_state.spoofVersion copy];
+        spoofDevice = [g_state.spoofDevice copy];
+    }
 
     NSString *rewritten = value;
-    rewritten = [rewritten stringByReplacingOccurrencesOfString:
-        [NSString stringWithFormat:@"/%@ ", curVer]
-                  withString:[NSString stringWithFormat:@"/%@ ", spoofVersion]];
-    rewritten = [rewritten stringByReplacingOccurrencesOfString:
-        [NSString stringWithFormat:@"/%@ ", curDev]
-                  withString:[NSString stringWithFormat:@"/%@ ", spoofDevice]];
-    // Also match tokens at end of string (no trailing space)
-    NSString *verSuffix = [NSString stringWithFormat:@"/%@", curVer];
-    if ([rewritten hasSuffix:verSuffix]) {
-        rewritten = [[rewritten substringToIndex:rewritten.length - verSuffix.length]
-                      stringByAppendingFormat:@"/%@", spoofVersion];
-    }
-    NSString *devSuffix = [NSString stringWithFormat:@"/%@", curDev];
-    if ([rewritten hasSuffix:devSuffix]) {
-        rewritten = [[rewritten substringToIndex:rewritten.length - devSuffix.length]
-                      stringByAppendingFormat:@"/%@", spoofDevice];
+    NSString *currentVersionToken = [NSString stringWithFormat:@"/%@ ", g_state.currentVersion];
+    NSString *spoofVersionToken = [NSString stringWithFormat:@"/%@ ", spoofVersion];
+    NSString *currentDeviceToken = [NSString stringWithFormat:@"/%@ ", g_state.currentDevice];
+    NSString *spoofDeviceToken = [NSString stringWithFormat:@"/%@ ", spoofDevice];
+
+    rewritten = [rewritten stringByReplacingOccurrencesOfString:currentVersionToken
+                                                     withString:spoofVersionToken];
+    rewritten = [rewritten stringByReplacingOccurrencesOfString:currentDeviceToken
+                                                     withString:spoofDeviceToken];
+
+    NSString *versionSuffix = [NSString stringWithFormat:@"/%@", g_state.currentVersion];
+    if ([rewritten hasSuffix:versionSuffix]) {
+        rewritten = [[rewritten substringToIndex:rewritten.length - versionSuffix.length]
+                     stringByAppendingFormat:@"/%@", spoofVersion];
     }
 
-    LIInfo("UA spoof: '%s' -> '%s'", value.UTF8String, rewritten.UTF8String);
+    NSString *deviceSuffix = [NSString stringWithFormat:@"/%@", g_state.currentDevice];
+    if ([rewritten hasSuffix:deviceSuffix]) {
+        rewritten = [[rewritten substringToIndex:rewritten.length - deviceSuffix.length]
+                     stringByAppendingFormat:@"/%@", spoofDevice];
+    }
+
+    if (![rewritten isEqualToString:value]) {
+        LIInfo("rewrote App Store User-Agent for configured device/iOS identity");
+    }
+
     [spoofVersion release];
     [spoofDevice release];
     %orig(rewritten, field);
 }
+
+%end
 %end
 
-%end   // group StoreHooks
-
 %ctor {
-    struct utsname systemInfo;
-    uname(&systemInfo);
-    g_state.currentDevice  = [[NSString alloc] initWithUTF8String:systemInfo.machine];
-    NSDictionary *sysVer = [NSDictionary dictionaryWithContentsOfFile:
-        @"/System/Library/CoreServices/SystemVersion.plist"];
-    g_state.currentVersion = [sysVer[@"ProductVersion"] copy];
+    @autoreleasepool {
+        struct utsname systemInfo;
+        uname(&systemInfo);
 
-    g_lock = [NSObject new];
+        g_state.currentDevice = [[NSString alloc] initWithUTF8String:systemInfo.machine];
+        NSDictionary *systemVersion = [NSDictionary dictionaryWithContentsOfFile:
+            @"/System/Library/CoreServices/SystemVersion.plist"];
+        g_state.currentVersion = [systemVersion[@"ProductVersion"] copy];
+        g_lock = [NSObject new];
 
-    LINotice("loading in '%s' (device=%s, iOS=%s)",
-             __progname, systemInfo.machine,
-             g_state.currentVersion.UTF8String);
+        LINotice("loaded in process '%s' on %s / iOS %s",
+                 __progname ? __progname : "unknown",
+                 systemInfo.machine,
+                 g_state.currentVersion.UTF8String ?: "unknown");
 
-    CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
-        NULL, (CFNotificationCallback)settingsChanged,
-        CFSTR("dev.playday3008.lowerinstall/SettingsChanged"),
-        NULL, CFNotificationSuspensionBehaviorCoalesce);
-    settingsChanged(NULL, NULL, NULL, NULL, NULL);
+        CFNotificationCenterAddObserver(CFNotificationCenterGetDarwinNotifyCenter(),
+            NULL, settingsChanged, CFSTR(SETTINGS_CHANGED), NULL,
+            CFNotificationSuspensionBehaviorCoalesce);
+        settingsChanged(NULL, NULL, NULL, NULL, NULL);
 
-    if (strcmp(__progname, "itunesstored") == 0 ||
-        strcmp(__progname, "appstored")    == 0) {
-        %init(StoreHooks);
-        LINotice("initialised StoreHooks");
-    } else if (strcmp(__progname, "installd") == 0) {
-        %init(InstalldHooks);
-        LINotice("initialised InstalldHooks");
+        const char *processName = __progname ? __progname : "";
+
+        if (strcmp(processName, "installd") == 0) {
+            Class bundleClass = objc_getClass("MIBundle");
+            SEL selector = @selector(_isMinimumOSVersion:applicableToOSVersion:requiredOS:error:);
+
+            if (bundleClass != Nil && class_getInstanceMethod(bundleClass, selector) != NULL) {
+                %init(InstalldHooks);
+                LINotice("installed targeted MIBundle minimum-OS hook");
+            } else {
+                LILog(LOG_ERR, "MIBundle minimum-OS selector unavailable; installer hook NOT installed");
+            }
+        } else if (strcmp(processName, "itunesstored") == 0 ||
+                   strcmp(processName, "appstored") == 0) {
+            %init(StoreHooks);
+            LINotice("installed App Store User-Agent hook");
+        }
     }
 }
