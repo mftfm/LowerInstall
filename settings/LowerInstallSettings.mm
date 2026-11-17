@@ -213,7 +213,7 @@ static void LIRespring(void) {
 
         // 10. footer
         spec = [PSSpecifier emptyGroupSpecifier];
-        [spec setProperty:@"LowerInstall © julioverne 2022, PlayDay 2026" forKey:@"footerText"];
+        [spec setProperty:@"Original: julioverne · PlayDay · Rootless maintenance: @MftFM" forKey:@"footerText"];
         [specifiers addObject:spec];
 
         _specifiers = [specifiers copy];
