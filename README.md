@@ -1,157 +1,112 @@
 # LowerInstall
 
-Install apps that require a newer iOS version on older iOS. Bypasses
-`MobileInstallation` device/iOS validation and spoofs the App Store's
-outgoing User-Agent so metadata servers return IPAs for a spoofed OS.
+**Rootless iOS tweak for testing app compatibility when an app declares a newer minimum iOS version than the device runs.**
 
-## The problem
+This maintained fork modernizes the original LowerInstall project for rootless jailbreak environments. It provides an install-time minimum-iOS-version bypass in `installd` and an optional App Store User-Agent spoof for store metadata requests.
 
-Two independent checks reject newer-iOS apps on older iOS:
+> **Tested configuration:** iPhone X · iOS 16.7.16 · Dopamine rootless · ElleKit.  
+> **Intended support:** arm64/arm64e rootless jailbreaks on iOS 15 and later. Other device/iOS combinations are not yet confirmed. Private MobileInstallation APIs can change between iOS releases.
 
-- **Install-time.** `installd` validates the IPA's `Info.plist` against the
-  running device and OS (family, thinning, `MinimumOSVersion`, metadata). A
-  mismatch returns an error before the app is copied to `/var/containers`.
-- **Store delivery.** The App Store client (`itunesstored` on iOS 9,
-  `appstored` on iOS 10+) advertises its running OS/device in the
-  `User-Agent` header. Apple's metadata servers use this to pick which
-  IPA variant to return; newer apps simply aren't served to older UAs.
+## What it does
 
-## The fix
+### 1. Installer minimum-iOS-version bypass
 
-**A. `installd` bypasses.** Hook `MIBundle`, `MIInstallableBundle`,
-`MIExecutableBundle`, `MIPluginKitPluginBundle`, `MIDaemonConfiguration` to
-force device-family / thinning / metadata validation to report success. The
-`-supportedDevices` hook injects the running device into the supported list
-rather than spoofing — the goal is "treat this device as supported", not
-"pretend to be a different device".
+Hooks the private `MIBundle` minimum-OS validation method used by `installd`. When enabled, the tweak allows the installer's minimum-OS check to pass even when the IPA declares a newer `MinimumOSVersion`.
 
-**B. Store User-Agent rewrite.** Hook
-`-[NSMutableURLRequest setValue:forHTTPHeaderField:]`. When the field is
-`User-Agent` and the current OS version is literally present in the value,
-rewrite the device / version tokens in the UA to the spoofed values. No
-rewrite happens when spoof values equal current values (the default), so
-the hook is cheap and idempotent on unaffected requests.
+This is the fix for the `DeviceOSVersionTooLow` / `MIInstallerErrorDomain Code 9` rejection observed on iOS 16.7.16.
 
-Both subsystems are individually toggleable in the settings pane.
+### 2. Optional App Store User-Agent spoofing
 
-## Building
+When enabled, rewrites the iOS-version and device tokens in outgoing App Store `User-Agent` headers. This can help request metadata or app variants associated with a different device/iOS identity. It is independent of the installer bypass.
 
-The project uses [Theos](https://theos.dev) and builds inside a container
-so no local iOS toolchain is required.
+### 3. Settings
 
-### Docker
+Open **Settings → LowerInstall**.
 
-```sh
-# One-step build
-docker compose up --build
+- **Enabled** — master switch.
+- **Install-time bypasses** — controls the `installd` minimum-OS hook.
+- **Store User-Agent spoofing** — controls App Store User-Agent rewriting.
+- **iOS Version** — version string to advertise to App Store metadata services.
+- **Device** — hardware identifier to advertise, for example `iPhone11,8`.
+- **Reset settings** — clears custom preferences.
 
-# Or manually
-docker build -t lowerinstall-build -f Containerfile .
-docker run --rm -v "$PWD:/build:Z" lowerinstall-build
-```
+By default, spoof values fall back to the device's actual iOS version and hardware identifier. The installer bypass does not require changing these fields.
 
-### Podman
+## What this does not do
 
-```sh
-# One-step build
-podman-compose up --build
+- It does **not** add APIs, frameworks, entitlements, or capabilities missing from the installed iOS version.
+- It does **not** guarantee that an app requiring newer system functionality will launch or work correctly.
+- It does **not** make an incompatible app compatible with the device's CPU, GPU, memory, or hardware.
+- It does **not** bypass Apple ID, purchase, server-side, or account checks.
+- It is not intended to disable code-signing or unrelated package-validation checks.
 
-# Or manually
-podman build -t lowerinstall-build -f Containerfile .
-podman run --rm -v "$PWD:/build:Z" lowerinstall-build
-```
+An IPA may install successfully and still crash, refuse to launch, or malfunction because the required OS functionality is absent.
 
-The `.deb` is written to `packages/`.
+## Compatibility
 
-### Local
+| Item | Status |
+|---|---|
+| Jailbreak type | Rootless |
+| Jailbreak tested | Dopamine |
+| Injection compatibility | ElleKit / Substrate compatibility layer |
+| Architecture | arm64 / arm64e |
+| Minimum intended iOS | iOS 15.0 |
+| Confirmed device test | iPhone X, iOS 16.7.16 |
+| Other iOS versions/devices | Not yet verified |
 
-Install [Theos](https://theos.dev) (includes toolchain and SDK):
-
-```sh
-bash -c "$(curl -fsSL https://raw.githubusercontent.com/theos/theos/master/bin/install-theos)"
-```
-
-Install the iPhoneOS 12.4 SDK:
-
-```sh
-$THEOS/bin/install-sdk iPhoneOS12.4
-```
-
-Then build:
-
-```sh
-make package FINALPACKAGE=1
-```
+This project uses private iOS classes and selectors. Compatibility with future or different iOS versions must be tested; do not assume universal support.
 
 ## Installation
 
+1. Open the **Releases** page.
+2. Download the latest `.deb` asset.
+3. Install it using Sileo or another package manager compatible with your rootless jailbreak.
+4. Open **Settings → LowerInstall** to configure the switches and optional spoof values.
+
+Do not install a rootful package on a rootless jailbreak. Only use a release explicitly marked rootless.
+
+## Building from source
+
+Requires Theos, an iOS SDK, and a rootless jailbreak package toolchain.
+
 ```sh
-scp packages/*.deb root@<device>:/tmp/
-ssh root@<device> 'dpkg -i /tmp/dev.playday3008.lowerinstall_*.deb'
+git clone https://github.com/mftfm/LowerInstall.git
+cd LowerInstall
+make clean package FINALPACKAGE=1
 ```
 
-The `postinst` kills `installd`, `itunesstored`, and `appstored` so
-launchd respawns them under Substrate. No respring or reboot needed.
+The project Makefile sets the rootless package scheme and arm64/arm64e architectures. The resulting package is written to `packages/`.
 
-## Settings
+For a local Theos setup, see [Theos installation documentation](https://theos.dev/docs/installation).
 
-Settings pane: **Settings → LowerInstall**.
+## Diagnostics
 
-| Toggle                            | Default | Notes |
-|-----------------------------------|---------|-------|
-| Enabled                           | on      | master toggle |
-| Install-time bypasses             | on      | controls the `installd` hook group |
-| Store User-Agent spoofing         | on      | controls the `NSMutableURLRequest` hook |
-| iOS Version (spoofed)             | current | empty falls back to current |
-| Device (spoofed)                  | current | e.g. `iPhone11,8` |
-| Reset settings                    | —       | clears all preferences, prompts respring |
+The tweak writes messages with the `[LowerInstall:` prefix to the system log. For an installation failure, capture logs from `installd` and look for `DeviceOSVersionTooLow`, `MIBundle`, or `LowerInstall`.
 
-Changes are applied immediately via Darwin notification — no respring
-required for toggle changes; the reset button prompts one because reading
-an empty state at hook time is indistinguishable from "defaults".
+## What's different from the upstream project?
 
-## How it works
+This repository is a maintained fork of [PlayDay-iOS/LowerInstall](https://github.com/PlayDay-iOS/LowerInstall), which continues the work of [julioverne/LowerInstall](https://github.com/julioverne/LowerInstall).
 
-### Injection targets (Substrate filter)
+This fork's focus is specifically modern rootless jailbreak support:
 
-- `installd` — the MobileInstallation daemon.
-- `itunesstored` — iTunes Store / App Store metadata client on iOS 9.
-- `appstored` — App Store metadata client on iOS 10+.
+- Rootless package configuration for arm64/arm64e instead of the original rootful package target.
+- A targeted hook for the private `MIBundle` minimum-OS validation method identified in iOS 16.7.16 installer logs.
+- A Settings pane for independently enabling the installer bypass and Store User-Agent spoofing, with editable device and iOS-version values.
+- Rootless-oriented packaging and release/build documentation.
+- Maintained by **@MftFM**.
 
-### Install-time hooks
+The project retains the original project's identity and license lineage. This is a community-maintained compatibility fork, not an official Apple or upstream release.
 
-| Class                     | Method                                                          | Override |
-|---------------------------|-----------------------------------------------------------------|----------|
-| `MIDaemonConfiguration`   | `-skipDeviceFamilyCheck`, `-skipThinningCheck`                  | `return YES` |
-| `MIBundle`                | `-minimumOSVersion`                                             | `return @"2.0"` |
-| `MIBundle`                | `-supportedDevices`                                             | append current device if missing |
-| `MIBundle`                | `-isCompatibleWithDeviceFamily:` and six similar `is*/validate*` methods | `return YES` |
-| `MIInstallableBundle`     | four `_validate*` / `_verify*` methods                          | `return YES` |
-| `MIExecutableBundle`      | `-hasOnlyAllowedWatchKitAppInfoPlistKeysForWatchKitVersion:error:` | `return YES` |
-| `MIPluginKitPluginBundle` | `-validateBundleMetadataWithError:`                             | `return YES` |
+## Credits
 
-### Store hook
+- Original LowerInstall project: [julioverne](https://github.com/julioverne/LowerInstall)
+- Rootless development lineage: [PlayDay-iOS](https://github.com/PlayDay-iOS/LowerInstall)
+- Rootless maintenance, compatibility work and Settings updates: **[@MftFM](https://github.com/mftfm)**
 
-`-[NSMutableURLRequest setValue:forHTTPHeaderField:]` — when the field is
-`User-Agent` and the value contains the current iOS version, two sequential
-`stringByReplacingOccurrencesOfString:` passes rewrite `/<version> ` and
-`/<device> ` tokens to the spoofed pair.
+## Donations
 
-### Activation
-
-`postinst` and `/etc/rc.d/lowerinstall` both `killall -9` the three tweaked
-daemons. launchd respawns them, Substrate injects the dylib, hooks take
-effect. No respring or reboot needed.
-
-## Prior art
-
-This approach originated in julioverne's
-[LowerInstall](https://github.com/julioverne/LowerInstall). The current
-repo is a clean-room-in-spirit rewrite: same method list, same Darwin
-notification name, same User-Agent rewrite algorithm — but the source is
-fresh, restructured around the `wifi-fix-old-iOS` project template, and
-adds per-subsystem toggles. No code is copied verbatim.
+No donation link is configured at this time. If a suitable supported option becomes available, a link can be added here. Donations are optional and are not required to use the project.
 
 ## License
 
-MIT © 2026 PlayDay. See `LICENSE`.
+MIT. See [LICENSE](LICENSE) and retain the original copyright and attribution notices when redistributing.
