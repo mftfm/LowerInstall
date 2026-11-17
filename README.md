@@ -1,73 +1,75 @@
-# LowerInstall
+# 📦 LowerInstall
 
-**Rootless iOS tweak for testing app compatibility when an app declares a newer minimum iOS version than the device runs.**
+**🛠️ A rootless iOS jailbreak tweak that helps install apps when their declared minimum iOS version is newer than the iOS version running on your device.**
 
-This maintained fork modernizes the original LowerInstall project for rootless jailbreak environments. It provides an install-time minimum-iOS-version bypass in `installd` and an optional App Store User-Agent spoof for store metadata requests.
+Welcome! This is a community-maintained rootless fork of LowerInstall, focused on modern rootless jailbreak environments. It adds a targeted installer minimum-iOS-version bypass and optional App Store User-Agent spoofing.
 
-> **Tested configuration:** iPhone X · iOS 16.7.16 · Dopamine rootless · ElleKit.  
-> **Intended support:** arm64/arm64e rootless jailbreaks on iOS 15 and later. Other device/iOS combinations are not yet confirmed. Private MobileInstallation APIs can change between iOS releases.
+> 🧪 **Confirmed test:** iPhone X · iOS 16.7.16 · Dopamine (rootless) · ElleKit  
+> 🎯 **Intended target:** arm64/arm64e rootless jailbreaks on iOS 15 and later. Other devices and iOS versions are not yet confirmed. Private iOS APIs can change without notice.
 
-## What it does
+## ✨ Features
 
-### 1. Installer minimum-iOS-version bypass
+### 📲 1. Installer minimum-iOS-version bypass
 
-Hooks the private `MIBundle` minimum-OS validation method used by `installd`. When enabled, the tweak allows the installer's minimum-OS check to pass even when the IPA declares a newer `MinimumOSVersion`.
+Hooks the private `MIBundle` minimum-OS validation method used by `installd`. When enabled, it allows the installer's minimum-OS check to pass even if an IPA declares a newer `MinimumOSVersion`.
 
-This is the fix for the `DeviceOSVersionTooLow` / `MIInstallerErrorDomain Code 9` rejection observed on iOS 16.7.16.
+This targets the `DeviceOSVersionTooLow` / `MIInstallerErrorDomain Code 9` rejection observed on iOS 16.7.16.
 
-### 2. Optional App Store User-Agent spoofing
+### 🛍️ 2. Optional App Store User-Agent spoofing
 
-When enabled, rewrites the iOS-version and device tokens in outgoing App Store `User-Agent` headers. This can help request metadata or app variants associated with a different device/iOS identity. It is independent of the installer bypass.
+When enabled, rewrites the iOS-version and device tokens in outgoing App Store `User-Agent` headers. This may help request metadata or app variants associated with another device/iOS identity. It is independent of the installer bypass.
 
-### 3. Settings
+### ⚙️ 3. Settings panel
 
-Open **Settings → LowerInstall**.
+Open **Settings → LowerInstall** to configure:
 
-- **Enabled** — master switch.
-- **Install-time bypasses** — controls the `installd` minimum-OS hook.
-- **Store User-Agent spoofing** — controls App Store User-Agent rewriting.
-- **iOS Version** — version string to advertise to App Store metadata services.
-- **Device** — hardware identifier to advertise, for example `iPhone11,8`.
-- **Reset settings** — clears custom preferences.
+- 🔘 **Enabled** — master switch for the tweak.
+- 📦 **Installer Minimum iOS Bypass** — controls the `installd` minimum-OS hook.
+- 🛍️ **App Store User-Agent Spoofing** — controls App Store User-Agent rewriting.
+- 📱 **iOS Version** — version string to advertise to App Store metadata services.
+- 🧩 **Device Identifier** — hardware identifier to advertise, for example `iPhone11,8`.
+- ♻️ **Reset settings** — restores default preferences.
 
-By default, spoof values fall back to the device's actual iOS version and hardware identifier. The installer bypass does not require changing these fields.
+The installer bypass does not require changing the spoofing fields. Keep the actual device identity unless you have a specific reason to change it.
 
-## What this does not do
+## ⚠️ Important limitations
 
-- It does **not** add APIs, frameworks, entitlements, or capabilities missing from the installed iOS version.
-- It does **not** guarantee that an app requiring newer system functionality will launch or work correctly.
-- It does **not** make an incompatible app compatible with the device's CPU, GPU, memory, or hardware.
-- It does **not** bypass Apple ID, purchase, server-side, or account checks.
-- It is not intended to disable code-signing or unrelated package-validation checks.
+LowerInstall changes an installation compatibility check. It does **not** magically make a newer-iOS app fully compatible with an older iOS release.
 
-An IPA may install successfully and still crash, refuse to launch, or malfunction because the required OS functionality is absent.
+- ❌ It does not add missing APIs, frameworks, entitlements, or system components.
+- ❌ It does not guarantee that an app will launch or work correctly after installation.
+- ❌ It does not make an app compatible with unsupported CPU, GPU, memory, or hardware.
+- ❌ It does not bypass Apple ID, purchase, server-side, or account checks.
+- 🛡️ It is not intended to disable code-signing or unrelated package-validation checks.
 
-## Compatibility
+An IPA may install successfully and still crash, refuse to launch, or malfunction because required system functionality is unavailable.
+
+## 📋 Compatibility
 
 | Item | Status |
 |---|---|
 | Jailbreak type | Rootless |
-| Jailbreak tested | Dopamine |
+| Tested jailbreak | Dopamine |
 | Injection compatibility | ElleKit / Substrate compatibility layer |
-| Architecture | arm64 / arm64e |
-| Minimum intended iOS | iOS 15.0 |
-| Confirmed device test | iPhone X, iOS 16.7.16 |
-| Other iOS versions/devices | Not yet verified |
+| Architectures | arm64 / arm64e |
+| Intended minimum iOS | iOS 15.0 |
+| Confirmed test | iPhone X · iOS 16.7.16 |
+| Other devices/iOS versions | Not yet verified |
 
-This project uses private iOS classes and selectors. Compatibility with future or different iOS versions must be tested; do not assume universal support.
+⚠️ This tweak uses private iOS classes and selectors. Compatibility with other iOS versions must be tested; do not assume universal support.
 
-## Installation
+## ⬇️ Installation
 
-1. Open the **Releases** page.
-2. Download the latest `.deb` asset.
+1. Open the **[Releases](https://github.com/mftfm/LowerInstall/releases)** page.
+2. Download the latest rootless `.deb` asset.
 3. Install it using Sileo or another package manager compatible with your rootless jailbreak.
-4. Open **Settings → LowerInstall** to configure the switches and optional spoof values.
+4. Open **Settings → LowerInstall** and configure the options.
 
-Do not install a rootful package on a rootless jailbreak. Only use a release explicitly marked rootless.
+**Important:** Do not install a rootful package on a rootless jailbreak. Only install a release explicitly marked **rootless**.
 
-## Building from source
+## 🧰 Build from source
 
-Requires Theos, an iOS SDK, and a rootless jailbreak package toolchain.
+You'll need Theos, an iOS SDK, and a rootless jailbreak package toolchain.
 
 ```sh
 git clone https://github.com/mftfm/LowerInstall.git
@@ -75,38 +77,44 @@ cd LowerInstall
 make clean package FINALPACKAGE=1
 ```
 
-The project Makefile sets the rootless package scheme and arm64/arm64e architectures. The resulting package is written to `packages/`.
+The Makefile configures rootless packaging and arm64/arm64e architectures. The resulting package is written to `packages/`.
 
-For a local Theos setup, see [Theos installation documentation](https://theos.dev/docs/installation).
+📖 See the [Theos installation guide](https://theos.dev/docs/installation) for toolchain setup.
 
-## Diagnostics
+## 🐛 Diagnostics
 
-The tweak writes messages with the `[LowerInstall:` prefix to the system log. For an installation failure, capture logs from `installd` and look for `DeviceOSVersionTooLow`, `MIBundle`, or `LowerInstall`.
+The tweak writes messages with the `[LowerInstall:` prefix to the system log. When troubleshooting an installation failure, capture logs from `installd` and look for:
 
-## What's different from the upstream project?
+- `DeviceOSVersionTooLow`
+- `MIBundle`
+- `LowerInstall`
 
-This repository is a maintained fork of [PlayDay-iOS/LowerInstall](https://github.com/PlayDay-iOS/LowerInstall), which continues the work of [julioverne/LowerInstall](https://github.com/julioverne/LowerInstall).
+Please include your device, iOS version, jailbreak, package version, and relevant logs when opening an issue.
 
-This fork's focus is specifically modern rootless jailbreak support:
+## 🔀 What's different in this fork?
 
-- Rootless package configuration for arm64/arm64e instead of the original rootful package target.
-- A targeted hook for the private `MIBundle` minimum-OS validation method identified in iOS 16.7.16 installer logs.
-- A Settings pane for independently enabling the installer bypass and Store User-Agent spoofing, with editable device and iOS-version values.
-- Rootless-oriented packaging and release/build documentation.
-- Maintained by **@MftFM**.
+This repository is a maintained fork of [PlayDay-iOS/LowerInstall](https://github.com/PlayDay-iOS/LowerInstall), continuing the work of [julioverne/LowerInstall](https://github.com/julioverne/LowerInstall).
 
-The project retains the original project's identity and license lineage. This is a community-maintained compatibility fork, not an official Apple or upstream release.
+This fork focuses on modern rootless jailbreak support:
 
-## Credits
+- 📦 Rootless package configuration for arm64/arm64e instead of the original rootful package target.
+- 🎯 A targeted hook for the private `MIBundle` minimum-OS validation method identified in iOS 16.7.16 installer logs.
+- ⚙️ A Settings pane with independent installer-bypass and Store User-Agent controls, plus editable device and iOS-version values.
+- 🧰 Rootless-oriented packaging and build/release documentation.
+- 👨‍💻 Active maintenance and compatibility work by **[@MftFM](https://github.com/mftfm)**.
 
-- Original LowerInstall project: [julioverne](https://github.com/julioverne/LowerInstall)
-- Rootless development lineage: [PlayDay-iOS](https://github.com/PlayDay-iOS/LowerInstall)
-- Rootless maintenance, compatibility work and Settings updates: **[@MftFM](https://github.com/mftfm)**
+The original project's identity and license lineage are retained. This is an independent community-maintained fork, not an official Apple or upstream release.
 
-## Donations
+## 🙌 Credits
 
-No donation link is configured at this time. If a suitable supported option becomes available, a link can be added here. Donations are optional and are not required to use the project.
+- 🧑‍💻 Original LowerInstall project: [julioverne](https://github.com/julioverne/LowerInstall)
+- 🧑‍🔧 Rootless development lineage: [PlayDay-iOS](https://github.com/PlayDay-iOS/LowerInstall)
+- 🚀 Rootless maintenance, compatibility work, and Settings updates: **[@MftFM](https://github.com/mftfm)**
 
-## License
+## ☕ Support / Donations
 
-MIT. See [LICENSE](LICENSE) and retain the original copyright and attribution notices when redistributing.
+Donations are completely optional. No payment link is configured yet; a legitimate support link may be added here later. The tweak remains free to use.
+
+## 📄 License
+
+MIT. See [LICENSE](LICENSE). Please retain the original copyright and attribution notices when redistributing.
